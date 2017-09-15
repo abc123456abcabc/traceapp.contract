@@ -1,9 +1,8 @@
 pragma solidity ^0.4.4;
-import 'Common.sol';
 
 contract TraceData{
     address                         public  owner;
-    mapping(bytes16 => UcodeDetail)  public  nthUcodeMap;
+    mapping(bytes16 => UcodeDetail) public  nthUcodeMap;
 
     struct UcodeDetail{
         uint8       status;
@@ -16,7 +15,7 @@ contract TraceData{
     }
     
     ////////////////////////////////////////////////////////
-    // description: data writer, just write, donot check 
+    // description: data writer, just write, NOT check
     ////////////////////////////////////////////////////////
     function setter(bytes16 nthucode, uint8 status, bytes31 extinfo, address preuserid) onlyOwner returns(uint8){
         require(status != 0);

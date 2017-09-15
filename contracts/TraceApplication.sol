@@ -1,24 +1,30 @@
 pragma solidity ^0.4.4;
-import "./Common.sol";
 import "./TraceData.sol";
 
 contract TraceApplication{
-    address                         public  admin;
+    address                         private admin;
 
     mapping(address => address)     private userDataMap;
     mapping(bytes16 => UcodeInfo)   private ucodeInfoMap;
+    mapping(bytes16 => UcodeTmpInf) private ucodeTmpInfoMap;
 
     struct UcodeInfo{
         uint8                       nth;
         address                     owner; 
     }
 
+    struct UcodeTmpInf{
+        uint                        pendingtime;
+        address                     nextowner;
+    }
+
     enum UcodeStatus{ 
         INVALIDE,                   //= 0,
         START_TRANSFER_IN,          //= 1,
-        TRANSFER_SUCCESS,           //= 2,
+        TRANSFER_IN_SUCCESS,        //= 2,
         START_TRANSFER_OUT,         //= 3,
-        FORBIDDEN                   //= 4
+        TRANSFER_OUT_SUCCESS,       //= 4,
+        FORBIDDEN                   //= 5
     }
 
     event AccountRegister(
@@ -40,6 +46,13 @@ contract TraceApplication{
             );
     
     event UcodeAccept(
+            address indexed         owner,
+            address indexed         toaccount,
+            bytes16 indexed         ucode,
+            bool                    result
+            );
+
+    event UcodeTransferWithoutAccept(
             address indexed         owner,
             address indexed         toaccount,
             bytes16 indexed         ucode,
@@ -94,8 +107,8 @@ contract TraceApplication{
             ucodeinfo.owner     = msg.sender; 
             TraceData td        = TraceData(userDataMap[msg.sender]);
 
-            var nthucode     = _getNthUcode(ucodeinfo.nth, ucode);            
-            td.setter(nthucode, 2, 0, 0);
+            var nthucode        = _getNthUcode(ucodeinfo.nth, ucode);
+            td.setter(nthucode, uint8(UcodeStatus.TRANSFER_IN_SUCCESS), 0, 0);
 
             // register success.
             UcodeRegister(msg.sender, ucode, true);
@@ -119,14 +132,17 @@ contract TraceApplication{
         TraceData srctd     = TraceData(userDataMap[msg.sender]);
         TraceData desttd    = TraceData(userDataMap[toaccount]);
 
-        ucodeinfo.nth       = ucodeinfo.nth + 1; 
-        ucodeinfo.owner     = toaccount; 
 
         var nthucode1       = _getNthUcode(ucodeinfo.nth, ucode);            
-        srctd.setter(nthucode1, uint8(UcodeStatus.TRANSFER_SUCCESS), 0, 0);
+        srctd.setter(nthucode1, uint8(UcodeStatus.TRANSFER_OUT_SUCCESS), 0, 0);
         
         var nthucode2       = _getNthUcode(ucodeinfo.nth + 1, ucode);            
-        desttd.setter(nthucode2, uint8(UcodeStatus.TRANSFER_SUCCESS), 0, msg.sender);
+        desttd.setter(nthucode2, uint8(UcodeStatus.TRANSFER_IN_SUCCESS), 0, msg.sender);
+
+        ucodeinfo.nth       = ucodeinfo.nth + 1;
+        ucodeinfo.owner     = toaccount;
+
+        UcodeTransferWithoutAccept(msg.sender, toaccount, ucode, true);
     }
 
     ////////////////////////////////////////////////////////
@@ -134,9 +150,25 @@ contract TraceApplication{
     ////////////////////////////////////////////////////////
     function transferUcode(bytes16 ucode, address toaccount) onlyUser{
         UcodeInfo storage ucodeinfo = ucodeInfoMap[ucode];
-        TraceData srctd = TraceData(userDataMap[msg.sender]);
-        TraceData desttd = TraceData(userDataMap[toaccount]);
+        TraceData srctd     = TraceData(userDataMap[msg.sender]);
+        TraceData desttd    = TraceData(userDataMap[toaccount]);
 
+        require(ucodeinfo.nth != 0
+                && ucodeinfo.owner == msg.sender
+                && userDataMap[msg.sender] != 0
+                && toaccount != msg.sender);
+
+        var nthucode1       = _getNthUcode(ucodeinfo.nth, ucode);
+        var (status, x, y)  =srctd.nthUcodeMap(nthucode1);
+        require(status == uint8(UcodeStatus.TRANSFER_IN_SUCCESS)
+                ||  (status == uint8(UcodeStatus.START_TRANSFER_OUT)
+                    && ucodeTmpInfoMap[ucode].pendingtime  < now
+                    ));
+
+        srctd.setter(nthucode1, uint8(UcodeStatus.START_TRANSFER_OUT), 0, 0);
+        ucodeTmpInfoMap[ucode].pendingtime  = now + 86400;
+        ucodeTmpInfoMap[ucode].nextowner    = toaccount;
+        UcodeTransfer(msg.sender, toaccount, ucode, true);
     }
 
     ////////////////////////////////////////////////////////
@@ -150,8 +182,20 @@ contract TraceApplication{
         require(ucodeinfo.nth != 0 
                 && ucodeinfo.owner == msg.sender
                 && userDataMap[msg.sender] != 0 
-                && toaccount != msg.sender);
+                && toaccount != msg.sender
+                && ucodeTmpInfoMap[ucode].nextowner == msg.sender);
 
+        var nthucode1       = _getNthUcode(ucodeinfo.nth, ucode);
+        var (status, x, y)  = srctd.nthUcodeMap(nthucode1);
+        require(status == uint8(UcodeStatus.START_TRANSFER_OUT));
+        srctd.setter(nthucode1, uint8(UcodeStatus.TRANSFER_OUT_SUCCESS), 0, 0);
+
+        var nthucode2       = _getNthUcode(ucodeinfo.nth + 1, ucode);
+        desttd.setter(nthucode2, uint8(UcodeStatus.TRANSFER_IN_SUCCESS), 0, msg.sender);
+
+        delete ucodeTmpInfoMap[ucode];
+
+        UcodeTransfer(msg.sender, toaccount, ucode, true);
     }
 
     ////////////////////////////////////////////////////////
